@@ -1,0 +1,26 @@
+{
+  "name": "planner-man",
+  "version": "1.0.0",
+  "description": "پلنر من - Persian daily planner Android app",
+  "main": "index.js",
+  "scripts": {
+    "build": "echo 'Static www - no build step'",
+    "cap:sync": "npx cap sync android",
+    "cap:add": "npx cap add android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/app": "^6.0.2",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.2",
+    "@capacitor/keyboard": "^6.0.3",
+    "@capacitor/share": "^6.0.3",
+    "@capacitor/status-bar": "^6.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  },
+  "keywords": ["planner", "persian", "capacitor"],
+  "author": "Roya",
+  "license": "MIT"
+}
