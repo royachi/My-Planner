@@ -1,0 +1,152 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          yes | sdkmanager --licenses || true
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Add Android platform
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Configure Android project
+        run: |
+          # applicationId is already set by capacitor from capacitor.config.json
+          # Force portrait, status bar color, minSdk 24
+          # variables.gradle
+          if [ -f android/variables.gradle ]; then
+            sed -i 's/minSdkVersion = .*/minSdkVersion = 24/' android/variables.gradle
+            sed -i 's/compileSdkVersion = .*/compileSdkVersion = 34/' android/variables.gradle
+            sed -i 's/targetSdkVersion = .*/targetSdkVersion = 34/' android/variables.gradle
+          fi
+
+          # AndroidManifest: portrait + theme
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if [ -f "$MANIFEST" ]; then
+            # Add screenOrientation portrait to main activity if missing
+            if ! grep -q 'android:screenOrientation' "$MANIFEST"; then
+              sed -i 's/android:name=".MainActivity"/android:name=".MainActivity"\n            android:screenOrientation="portrait"/' "$MANIFEST"
+            fi
+            # Ensure soft input mode adjusts
+            if ! grep -q 'android:windowSoftInputMode' "$MANIFEST"; then
+              sed -i 's/android:name=".MainActivity"/android:name=".MainActivity"\n            android:windowSoftInputMode="adjustResize"/' "$MANIFEST"
+            fi
+          fi
+
+          # styles.xml - splash / status bar
+          STYLES=android/app/src/main/res/values/styles.xml
+          if [ -f "$STYLES" ]; then
+            # Ensure AppTheme.NoActionBar uses our color
+            sed -i 's/#FFFFFF/#b7a8d6/g' "$STYLES" || true
+            sed -i 's/#ffffff/#b7a8d6/g' "$STYLES" || true
+          fi
+
+          # colors.xml
+          COLORS=android/app/src/main/res/values/colors.xml
+          mkdir -p android/app/src/main/res/values
+          cat > "$COLORS" << 'EOFCOLORS'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#b7a8d6</color>
+    <color name="colorPrimaryDark">#b7a8d6</color>
+    <color name="colorAccent">#b7a8d6</color>
+    <color name="splashBackground">#b7a8d6</color>
+</resources>
+EOFCOLORS
+
+          # strings.xml app name
+          STRINGS=android/app/src/main/res/values/strings.xml
+          if [ -f "$STRINGS" ]; then
+            sed -i 's|<string name="app_name">.*</string>|<string name="app_name">پلنر من</string>|' "$STRINGS"
+            sed -i 's|<string name="title_activity_main">.*</string>|<string name="title_activity_main">پلنر من</string>|' "$STRINGS" || true
+            sed -i 's|<string name="package_name">.*</string>|<string name="package_name">com.roya.planner</string>|' "$STRINGS" || true
+            sed -i 's|<string name="custom_url_scheme">.*</string>|<string name="custom_url_scheme">com.roya.planner</string>|' "$STRINGS" || true
+          fi
+
+      - name: Generate launcher icons
+        run: |
+          # Requires ImageMagick (preinstalled on ubuntu-latest) or use node
+          sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick || true
+          ICON=www/icon-512.png
+          RES=android/app/src/main/res
+          # Background color layer for adaptive icon
+          BG='#b7a8d6'
+          for density in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            d=${density%:*}
+            s=${density#*:}
+            mkdir -p $RES/mipmap-$d $RES/mipmap-$d-v26
+            # legacy icon
+            convert "$ICON" -resize ${s}x${s} $RES/mipmap-$d/ic_launcher.png
+            convert "$ICON" -resize ${s}x${s} $RES/mipmap-$d/ic_launcher_round.png
+            convert "$ICON" -resize ${s}x${s} $RES/mipmap-$d/ic_launcher_foreground.png
+            # adaptive foreground (slightly inset)
+            convert "$ICON" -resize $((s*2))x$((s*2)) -gravity center -background none -extent $((s*2))x$((s*2)) $RES/mipmap-$d-v26/ic_launcher_foreground.png 2>/dev/null || \
+              convert "$ICON" -resize ${s}x${s} $RES/mipmap-$d-v26/ic_launcher_foreground.png
+            # background solid color
+            convert -size ${s}x${s} xc:"$BG" $RES/mipmap-$d-v26/ic_launcher_background.png
+            # adaptive xml
+            printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' '    <background android:drawable="@mipmap/ic_launcher_background"/>' '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' '</adaptive-icon>' > $RES/mipmap-$d-v26/ic_launcher.xml
+            printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' '    <background android:drawable="@mipmap/ic_launcher_background"/>' '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' '</adaptive-icon>' > $RES/mipmap-$d-v26/ic_launcher_round.xml
+          done
+          # Also anydpi
+          mkdir -p $RES/mipmap-anydpi-v26
+          printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' '    <background android:drawable="@color/splashBackground"/>' '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' '</adaptive-icon>' > $RES/mipmap-anydpi-v26/ic_launcher.xml
+          printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' '    <background android:drawable="@color/splashBackground"/>' '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' '</adaptive-icon>' > $RES/mipmap-anydpi-v26/ic_launcher_round.xml
+          echo "Icons generated"
+
+      - name: Build Debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Locate APK
+        id: apk
+        run: |
+          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
+          echo "Found: $APK"
+          ls -la "$APK"
+          echo "path=$APK" >> $GITHUB_OUTPUT
+          cp "$APK" planner-man-debug.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: planner-man-apk
+          path: planner-man-debug.apk
+          retention-days: 30
