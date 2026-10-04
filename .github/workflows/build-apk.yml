@@ -1,0 +1,245 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # -------------------------
+      # 1. Checkout
+      # -------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -------------------------
+      # 2. Node.js
+      # -------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # -------------------------
+      # 3. Java 17
+      # -------------------------
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # -------------------------
+      # 4. Android SDK
+      # -------------------------
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-34"
+          sdkmanager "build-tools;34.0.0"
+          yes | sdkmanager --licenses || true
+
+      # -------------------------
+      # 5. Install dependencies
+      # -------------------------
+      - name: Install npm dependencies
+        run: npm install
+
+      # -------------------------
+      # 6. Add / Sync Capacitor Android
+      # -------------------------
+      - name: Add Android platform
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+          npx cap sync android
+
+      # -------------------------
+      # 7. Configure Android
+      # -------------------------
+      - name: Configure Android project
+        run: |
+
+          # Android SDK versions
+          if [ -f android/variables.gradle ]; then
+            sed -i 's/minSdkVersion = .*/minSdkVersion = 24/' android/variables.gradle
+            sed -i 's/compileSdkVersion = .*/compileSdkVersion = 34/' android/variables.gradle
+            sed -i 's/targetSdkVersion = .*/targetSdkVersion = 34/' android/variables.gradle
+          fi
+
+          # AndroidManifest
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ -f "$MANIFEST" ]; then
+
+            # Portrait
+            if ! grep -q 'android:screenOrientation' "$MANIFEST"; then
+              sed -i 's|<activity|<activity android:screenOrientation="portrait"|' "$MANIFEST"
+            fi
+
+            # Keyboard resize
+            if ! grep -q 'android:windowSoftInputMode' "$MANIFEST"; then
+              sed -i 's|<activity|<activity android:windowSoftInputMode="adjustResize"|' "$MANIFEST"
+            fi
+
+          fi
+
+          # -------------------------
+          # Colors
+          # -------------------------
+          COLORS="android/app/src/main/res/values/colors.xml"
+
+          mkdir -p android/app/src/main/res/values
+
+          cat > "$COLORS" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="colorPrimary">#B7A8D6</color>
+              <color name="colorPrimaryDark">#B7A8D6</color>
+              <color name="colorAccent">#B7A8D6</color>
+              <color name="splashBackground">#B7A8D6</color>
+          </resources>
+          EOF
+
+          # -------------------------
+          # App name
+          # -------------------------
+          STRINGS="android/app/src/main/res/values/strings.xml"
+
+          if [ -f "$STRINGS" ]; then
+
+            sed -i 's|<string name="app_name">.*</string>|<string name="app_name">پلنر من</string>|' "$STRINGS" || true
+
+            sed -i 's|<string name="title_activity_main">.*</string>|<string name="title_activity_main">پلنر من</string>|' "$STRINGS" || true
+
+          fi
+
+      # -------------------------
+      # 8. Generate launcher icons
+      # -------------------------
+      - name: Generate launcher icons
+        run: |
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+
+          ICON="www/icon-512.png"
+          RES="android/app/src/main/res"
+
+          if [ ! -f "$ICON" ]; then
+            echo "ERROR: $ICON not found!"
+            exit 1
+          fi
+
+          BG="#B7A8D6"
+
+          # Remove old generated icons
+          rm -rf "$RES"/mipmap-mdpi
+          rm -rf "$RES"/mipmap-hdpi
+          rm -rf "$RES"/mipmap-xhdpi
+          rm -rf "$RES"/mipmap-xxhdpi
+          rm -rf "$RES"/mipmap-xxxhdpi
+
+          # Create directories
+          mkdir -p "$RES/mipmap-mdpi"
+          mkdir -p "$RES/mipmap-hdpi"
+          mkdir -p "$RES/mipmap-xhdpi"
+          mkdir -p "$RES/mipmap-xxhdpi"
+          mkdir -p "$RES/mipmap-xxxhdpi"
+
+          # mdpi 48x48
+          convert "$ICON" -resize 48x48 \
+            "$RES/mipmap-mdpi/ic_launcher.png"
+
+          # hdpi 72x72
+          convert "$ICON" -resize 72x72 \
+            "$RES/mipmap-hdpi/ic_launcher.png"
+
+          # xhdpi 96x96
+          convert "$ICON" -resize 96x96 \
+            "$RES/mipmap-xhdpi/ic_launcher.png"
+
+          # xxhdpi 144x144
+          convert "$ICON" -resize 144x144 \
+            "$RES/mipmap-xxhdpi/ic_launcher.png"
+
+          # xxxhdpi 192x192
+          convert "$ICON" -resize 192x192 \
+            "$RES/mipmap-xxxhdpi/ic_launcher.png"
+
+          # Round icons
+          cp "$RES/mipmap-mdpi/ic_launcher.png" \
+             "$RES/mipmap-mdpi/ic_launcher_round.png"
+
+          cp "$RES/mipmap-hdpi/ic_launcher.png" \
+             "$RES/mipmap-hdpi/ic_launcher_round.png"
+
+          cp "$RES/mipmap-xhdpi/ic_launcher.png" \
+             "$RES/mipmap-xhdpi/ic_launcher_round.png"
+
+          cp "$RES/mipmap-xxhdpi/ic_launcher.png" \
+             "$RES/mipmap-xxhdpi/ic_launcher_round.png"
+
+          cp "$RES/mipmap-xxxhdpi/ic_launcher.png" \
+             "$RES/mipmap-xxxhdpi/ic_launcher_round.png"
+
+          echo "Launcher icons generated successfully."
+
+      # -------------------------
+      # 9. Build Debug APK
+      # -------------------------
+      - name: Build Debug APK
+        working-directory: android
+        run: |
+
+          chmod +x gradlew
+
+          ./gradlew clean
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # -------------------------
+      # 10. Locate APK
+      # -------------------------
+      - name: Locate APK
+        run: |
+
+          APK=$(find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated!"
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
+
+          ls -lh "$APK"
+
+          cp "$APK" planner-man-debug.apk
+
+      # -------------------------
+      # 11. Upload APK
+      # -------------------------
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: planner-man-apk
+          path: planner-man-debug.apk
+          retention-days: 30
